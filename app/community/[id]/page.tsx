@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase'
 import CommunityDetailClient from './CommunityDetailClient'
 import { notFound } from 'next/navigation'
+export const dynamic = 'force-dynamic'
 
 export default async function CommunityPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
