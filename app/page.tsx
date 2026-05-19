@@ -1,7 +1,7 @@
 import { supabase } from '@/lib/supabase'
 import CommunityListClient from './CommunityListClient'
 
-export const revalidate = 60
+export const dynamic = 'force-dynamic'
 
 export default async function HomePage() {
   const { data: communities } = await supabase
