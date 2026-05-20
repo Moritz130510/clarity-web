@@ -332,7 +332,7 @@ export default function CommunityDetailClient({ community }: { community: Commun
     setShowComposer(false)
     await loadPosts()
     setPostingPost(false)
-  ]
+  }
 
   async function handleLike(postId: string) {
     if (!user) { window.location.href = '/login'; return }
@@ -878,18 +878,6 @@ export default function CommunityDetailClient({ community }: { community: Commun
                 <input type="datetime-local" value={newPostEventDate} onChange={e => setNewPostEventDate(e.target.value)} style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #E5E7EB', borderRadius: 10, padding: '10px 12px', fontSize: 14, outline: 'none', fontFamily: 'inherit', backgroundColor: '#FAFAFA' }} />
                 <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#6B7280', marginTop: 8, marginBottom: 4 }}>Meeting link (optional)</label>
                 <input value={newPostMeetingUrl} onChange={e => setNewPostMeetingUrl(e.target.value)} placeholder="https://zoom.us/..." style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #E5E7EB', borderRadius: 10, padding: '10px 12px', fontSize: 14, outline: 'none', fontFamily: 'inherit', backgroundColor: '#FAFAFA' }} />
-              </div>
-            )}
-            {subgroups.length > 0 && (
-              <div style={{ marginBottom: 12 }}>
-                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#6B7280', marginBottom: 4 }}>Post in</label>
-                <select value={newPostSubgroupId ?? ''} onChange={e => setNewPostSubgroupId(e.target.value || null)} style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #E5E7EB', borderRadius: 10, padding: '10px 12px', fontSize: 14, outline: 'none', fontFamily: 'inherit', backgroundColor: '#FAFAFA' }}>
-                  <option value="">Main feed</option>
-                  {subgroups.map(sg => <option key={sg.id} value={sg.id}>{sg.emoji ?? ''} {sg.name}</option>)}
-                </select>
-              </div>
-            )}
-            <button onClick={handlePostSubmit} disabled={postingPost || !newPostContent.trim()} style={{ width: '100%', backgroundColor: '#7C3AED', color: 'white', border: 'none', borderRadius: 22, padding: '10px 12px', fontSize: 14, outline: 'none', fontFamily: 'inherit', backgroundColor: '#FAFAFA' }} />
               </div>
             )}
             {subgroups.length > 0 && (
