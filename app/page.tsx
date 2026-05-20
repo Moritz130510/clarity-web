@@ -1,24 +1,21 @@
-import { supabase } from '@/lib/supabase'
-import CommunityListClient from './CommunityListClient'
+import { createClient } from '@supabase/supabase-js'
+import HomeClient from './HomeClient'
 
 export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
-export default async function HomePage() {
-  // Defensive query - some columns may not exist on all schema versions
-  let { data: communities, error } = await supabase
+export default async function Home() {
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  )
+
+  // Defensive: select only columns guaranteed to exist
+  const { data: communities } = await supabase
     .from('communities')
     .select('id, name, description, category, emoji, cover_image_url, logo_image_url, member_count, price_type, is_private, created_by')
-    .eq('is_private', false)
-    .order('member_count', { ascending: false })
+    .order('member_count', { ascending: false, nullsFirst: false })
+    .limit(100)
 
-  // If is_private column doesn't exist, fall back
-  if (error) {
-    const fallback = await supabase
-      .from('communities')
-      .select('id, name, description, category, emoji, cover_image_url, logo_image_url, member_count, price_type, created_by')
-      .order('member_count', { ascending: false })
-    communities = (fallback.data ?? []).map((c) => ({ ...c, is_private: false }))
-  }
-
-  return <CommunityListClient communities={communities ?? []} />
+  return <HomeClient allCommunities={communities ?? []} />
 }
