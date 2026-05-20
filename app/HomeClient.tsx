@@ -37,7 +37,7 @@ interface Profile {
   id: string
   display_name: string | null
   avatar_emoji: string | null
-  photo_url: string | null
+  avatar_url: string | null
   bio: string | null
   total_points: number | null
   level: string | null
@@ -105,7 +105,7 @@ export default function HomeClient({ allCommunities }: { allCommunities: Communi
   async function loadProfile(uid: string) {
     const tryTables = ['community_profiles', 'profiles']
     for (const table of tryTables) {
-      const { data, error } = await supabase.from(table).select('id, display_name, avatar_emoji, photo_url, bio, total_points, level, is_verified').eq('id', uid).maybeSingle()
+      const { data, error } = await supabase.from(table).select('id, display_name, avatar_emoji, avatar_url, bio, total_points, level, is_verified').eq('id', uid).maybeSingle()
       if (!error && data) { setProfile(data as Profile); return }
     }
   }
@@ -157,8 +157,8 @@ export default function HomeClient({ allCommunities }: { allCommunities: Communi
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {user ? (
               <div style={{ position: 'relative' }}>
-                <button onClick={() => setShowMenu(v => !v)} style={{ width: 38, height: 38, borderRadius: '50%', border: 'none', background: profile?.photo_url ? `url(${profile.photo_url}) center/cover` : '#EDE9FE', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, overflow: 'hidden' }}>
-                  {!profile?.photo_url && (profile?.avatar_emoji ?? '\u{1F464}')}
+                <button onClick={() => setShowMenu(v => !v)} style={{ width: 38, height: 38, borderRadius: '50%', border: 'none', background: profile?.avatar_url ? `url(${profile.avatar_url}) center/cover` : '#EDE9FE', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, overflow: 'hidden' }}>
+                  {!profile?.avatar_url && (profile?.avatar_emoji ?? '\u{1F464}')}
                 </button>
                 {showMenu && (
                   <div style={{ position: 'absolute', right: 0, top: 46, backgroundColor: 'white', borderRadius: 14, boxShadow: '0 8px 28px rgba(0,0,0,0.12)', overflow: 'hidden', minWidth: 180, border: '1px solid #F3F4F6' }}>
@@ -181,8 +181,8 @@ export default function HomeClient({ allCommunities }: { allCommunities: Communi
           <div style={{ background: 'linear-gradient(135deg, #7C3AED, #6366F1)', borderRadius: 22, padding: 18, marginBottom: 18, color: 'white', position: 'relative', overflow: 'hidden', boxShadow: '0 4px 20px rgba(124,58,237,0.22)' }}>
             <div style={{ position: 'absolute', right: -40, top: -40, width: 160, height: 160, borderRadius: '50%', backgroundColor: 'rgba(255,255,255,0.08)' }} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 12, position: 'relative' }}>
-              <div style={{ width: 60, height: 60, borderRadius: '50%', background: profile.photo_url ? `url(${profile.photo_url}) center/cover` : 'rgba(255,255,255,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, flexShrink: 0, border: '2px solid rgba(255,255,255,0.3)' }}>
-                {!profile.photo_url && (profile.avatar_emoji ?? '\u{1F464}')}
+              <div style={{ width: 60, height: 60, borderRadius: '50%', background: profile.avatar_url ? `url(${profile.avatar_url}) center/cover` : 'rgba(255,255,255,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, flexShrink: 0, border: '2px solid rgba(255,255,255,0.3)' }}>
+                {!profile.avatar_url && (profile.avatar_emoji ?? '\u{1F464}')}
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 2 }}>
