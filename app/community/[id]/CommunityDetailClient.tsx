@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { User } from '@supabase/supabase-js'
 import Link from 'next/link'
 
-type Tab = 'feed' | 'members' | 'classroom' | 'info'
+type Tab = 'feed' | 'classroom' | 'members' | 'leaderboard'
 
 interface Community {
   id: string
@@ -57,6 +57,7 @@ interface Course {
   title: string
   description: string | null
   emoji: string | null
+  cover_image_url?: string | null
   lesson_count?: number
 }
 
@@ -68,12 +69,61 @@ interface Lesson {
   lesson_order: number
 }
 
+const VERIFIED_NAMES = ['Clarity']
+
+function VerifiedBadge({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <circle cx="12" cy="12" r="10" fill="#1D9BF0"/>
+      <path d="M9 12l2 2 4-4" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  )
+}
+
+function timeAgo(dateStr: string) {
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h`
+  return `${Math.floor(hrs / 24)}d`
+}
+
 export default function CommunityDetailClient({ community }: { community: Community }) {
   const [tab, setTab] = useState<Tab>('feed')
   const [user, setUser] = useState<User | null>(null)
   const [isJoined, setIsJoined] = useState(false)
   const [memberCount, setMemberCount] = useState(community.member_count ?? 0)
   const [joining, setJoining] = useState(false)
+  const [userRole, setUserRole] = useState<string | null>(null)
+  const [descExpanded, setDescExpanded] = useState(false)
+
+  // Feed state
+  const [posts, setPosts] = useState<Post[]>([])
+  const [postsLoading, setPostsLoading] = useState(false)
+  const [newPostContent, setNewPostContent] = useState('')
+  const [postingPost, setPostingPost] = useState(false)
+  const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set())
+  const [commentInputs, setCommentInputs] = useState<Record<string, string>>({})
+  const [comments, setComments] = useState<Record<string, Comment[]>>({})
+
+  // Classroom state
+  const [courses, setCourses] = useState<Course[]>([])
+  const [coursesLoading, setCoursesLoading] = useState(false)
+  const [selectedCourse, setSelectedCourse] = useState<Course | null>(null)
+  const [lessons, setLessons] = useState<Lesson[]>([])
+  const [lessonsLoading, setLessonsLoading] = useState(false)
+
+  // Members state
+  const [members, setMembers] = useState<Member[]>([])
+  const [membersLoading, setMembersLoading] = useState(false)
+
+  // Leaderboard state
+  const [leaderboard, setLeaderboard] = useState<Member[]>([])
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false)
+
+  const isVerified = VERIFIED_NAMES.includes(community.name)
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -83,19 +133,27 @@ export default function CommunityDetailClient({ community }: { community: Commun
     const { data: sub } = supabase.auth.onAuthStateChange((_, session) => {
       setUser(session?.user ?? null)
       if (session?.user) checkMembership(session.user.id)
-      else setIsJoined(false)
+      else { setIsJoined(false); setUserRole(null) }
     })
     return () => sub.subscription.unsubscribe()
   }, [])
 
+  useEffect(() => {
+    if (tab === 'feed') loadPosts()
+    if (tab === 'classroom') loadCourses()
+    if (tab === 'members') loadMembers()
+    if (tab === 'leaderboard') loadLeaderboard()
+  }, [tab])
+
   async function checkMembership(userId: string) {
     const { data } = await supabase
       .from('community_members')
-      .select('profile_id')
+      .select('profile_id, role')
       .eq('community_id', community.id)
       .eq('profile_id', userId)
       .maybeSingle()
     setIsJoined(!!data)
+    setUserRole(data?.role ?? null)
   }
 
   async function handleJoin() {
@@ -106,717 +164,584 @@ export default function CommunityDetailClient({ community }: { community: Commun
         .eq('community_id', community.id).eq('profile_id', user.id)
       setIsJoined(false)
       setMemberCount(n => Math.max(0, n - 1))
+      setUserRole(null)
     } else {
       await supabase.from('community_members').insert({
         community_id: community.id, profile_id: user.id, role: 'member'
       })
       setIsJoined(true)
       setMemberCount(n => n + 1)
+      setUserRole('member')
     }
     setJoining(false)
   }
 
-  const tabs: { id: Tab; label: string }[] = [
-    { id: 'feed', label: 'Feed' },
-    { id: 'members', label: 'Mitglieder' },
-    { id: 'classroom', label: 'Classroom' },
-    { id: 'info', label: 'Info' },
-  ]
-
-  return (
-    <div className="min-h-screen bg-gray-950">
-      {/* Back nav */}
-      <div className="sticky top-0 z-10 bg-gray-950/90 backdrop-blur-sm border-b border-gray-900 px-4 py-3">
-        <div className="max-w-2xl mx-auto flex items-center justify-between">
-          <Link href="/" className="text-gray-400 hover:text-white transition-colors flex items-center gap-1 text-sm">
-            ← Zurück
-          </Link>
-          <span className="font-semibold truncate px-4">{community.name}</span>
-          <div className="w-16" />
-        </div>
-      </div>
-
-      {/* Banner */}
-      <div className="relative h-40 bg-gradient-to-br from-purple-900 to-indigo-900">
-        {community.cover_image_url && (
-          <img src={community.cover_image_url} alt="" className="w-full h-full object-cover opacity-60" />
-        )}
-        <div className="absolute inset-0 bg-gradient-to-t from-gray-950/80 to-transparent" />
-      </div>
-
-      <div className="max-w-2xl mx-auto px-4">
-        {/* Header */}
-        <div className="flex items-end justify-between -mt-8 mb-4">
-          <div className="flex items-end gap-3">
-            <div className="w-16 h-16 rounded-2xl bg-gray-800 border-4 border-gray-950 flex items-center justify-center text-3xl overflow-hidden flex-shrink-0">
-              {community.logo_image_url
-                ? <img src={community.logo_image_url} alt="" className="w-full h-full object-cover" />
-                : community.emoji ?? '🌐'}
-            </div>
-            <div className="pb-1">
-              <h1 className="text-xl font-bold leading-tight">{community.name}</h1>
-              <p className="text-gray-400 text-sm">{memberCount.toLocaleString('de')} Mitglieder</p>
-            </div>
-          </div>
-          <button
-            onClick={handleJoin}
-            disabled={joining}
-            className={`px-5 py-2 rounded-xl font-semibold text-sm transition-all ${
-              isJoined
-                ? 'bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700'
-                : 'bg-purple-600 hover:bg-purple-500 text-white'
-            }`}
-          >
-            {joining ? '…' : isJoined ? 'Beigetreten' : 'Beitreten'}
-          </button>
-        </div>
-
-        {/* Tabs */}
-        <div className="flex border-b border-gray-800 mb-4">
-          {tabs.map(t => (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
-                tab === t.id
-                  ? 'text-white border-purple-500'
-                  : 'text-gray-500 border-transparent hover:text-gray-300'
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Tab content */}
-        <div className="pb-20">
-          {tab === 'feed' && <FeedTab community={community} user={user} isJoined={isJoined} />}
-          {tab === 'members' && <MembersTab communityId={community.id} />}
-          {tab === 'classroom' && <ClassroomTab communityId={community.id} />}
-          {tab === 'info' && <InfoTab community={community} />}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ─── Feed Tab ────────────────────────────────────────────────────────────────
-
-function FeedTab({ community, user, isJoined }: { community: Community; user: User | null; isJoined: boolean }) {
-  const [posts, setPosts] = useState<Post[]>([])
-  const [loading, setLoading] = useState(true)
-  const [newContent, setNewContent] = useState('')
-  const [posting, setPosting] = useState(false)
-  const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set())
-
-  const loadPosts = useCallback(async () => {
+  async function loadPosts() {
+    setPostsLoading(true)
     const { data } = await supabase
       .from('community_posts')
-      .select(`
-        id, content, image_url, created_at, author_id,
-        profiles!community_posts_author_id_fkey(display_name, avatar_emoji, photo_url)
-      `)
+      .select('*, profiles:author_id(display_name, avatar_emoji, photo_url)')
       .eq('community_id', community.id)
       .order('created_at', { ascending: false })
-      .limit(50)
-
-    if (!data) { setLoading(false); return }
-
-    const postIds = data.map(p => p.id)
-
-    const [likesRes, commentCountRes, userLikesRes] = await Promise.all([
-      supabase.from('community_post_likes').select('post_id').in('post_id', postIds),
-      supabase.from('community_comments').select('post_id').in('post_id', postIds).is('parent_comment_id', null),
-      user
-        ? supabase.from('community_post_likes').select('post_id').in('post_id', postIds).eq('user_id', user.id)
-        : Promise.resolve({ data: [] }),
-    ])
-
-    const likeCounts: Record<string, number> = {}
-    const commentCounts: Record<string, number> = {}
-    const likedSet = new Set<string>()
-
-    likesRes.data?.forEach(l => { likeCounts[l.post_id] = (likeCounts[l.post_id] ?? 0) + 1 })
-    commentCountRes.data?.forEach(c => { commentCounts[c.post_id] = (commentCounts[c.post_id] ?? 0) + 1 })
-    userLikesRes.data?.forEach(l => likedSet.add(l.post_id))
-
-    setPosts(data.map(p => {
-      const profile = p.profiles as unknown as { display_name: string; avatar_emoji: string; photo_url: string | null } | null
-      return {
-        id: p.id,
-        content: p.content,
-        image_url: p.image_url,
-        created_at: p.created_at,
-        author_id: p.author_id,
-        author_name: profile?.display_name ?? 'Unbekannt',
-        author_avatar: profile?.avatar_emoji ?? '😊',
-        author_photo: profile?.photo_url ?? null,
-        like_count: likeCounts[p.id] ?? 0,
-        comment_count: commentCounts[p.id] ?? 0,
-        is_liked: likedSet.has(p.id),
-      }
-    }))
-    setLoading(false)
-  }, [community.id, user])
-
-  useEffect(() => { loadPosts() }, [loadPosts])
-
-  async function submitPost() {
-    if (!user || !newContent.trim()) return
-    setPosting(true)
-    await supabase.from('community_posts').insert({
-      community_id: community.id,
-      author_id: user.id,
-      content: newContent.trim(),
-    })
-    setNewContent('')
-    await loadPosts()
-    setPosting(false)
+    if (data) {
+      const enriched = await Promise.all(data.map(async (p: any) => {
+        let likeCount = 0, isLiked = false
+        const { count } = await supabase.from('post_likes').select('*', { count: 'exact', head: true }).eq('post_id', p.id)
+        likeCount = count ?? 0
+        if (user) {
+          const { data: liked } = await supabase.from('post_likes').select('id').eq('post_id', p.id).eq('profile_id', user.id).maybeSingle()
+          isLiked = !!liked
+        }
+        const { count: cc } = await supabase.from('post_comments').select('*', { count: 'exact', head: true }).eq('post_id', p.id)
+        return {
+          id: p.id, content: p.content, image_url: p.image_url, created_at: p.created_at,
+          author_id: p.author_id,
+          author_name: p.profiles?.display_name ?? 'Unknown',
+          author_avatar: p.profiles?.avatar_emoji ?? null,
+          author_photo: p.profiles?.photo_url ?? null,
+          like_count: likeCount, comment_count: cc ?? 0, is_liked: isLiked
+        }
+      }))
+      setPosts(enriched)
+    }
+    setPostsLoading(false)
   }
 
-  async function toggleLike(post: Post) {
-    if (!user) { window.location.href = '/login'; return }
-    if (post.is_liked) {
-      await supabase.from('community_post_likes').delete()
-        .eq('post_id', post.id).eq('user_id', user.id)
-    } else {
-      await supabase.from('community_post_likes').insert({ post_id: post.id, user_id: user.id })
+  async function loadCourses() {
+    setCoursesLoading(true)
+    const { data } = await supabase
+      .from('courses')
+      .select('id, title, description, emoji, cover_image_url')
+      .eq('community_id', community.id)
+    if (data) {
+      const withCounts = await Promise.all(data.map(async (c: any) => {
+        const { count } = await supabase.from('lessons').select('*', { count: 'exact', head: true }).eq('course_id', c.id)
+        return { ...c, lesson_count: count ?? 0 }
+      }))
+      setCourses(withCounts)
     }
-    setPosts(prev => prev.map(p =>
-      p.id === post.id
-        ? { ...p, is_liked: !p.is_liked, like_count: p.is_liked ? p.like_count - 1 : p.like_count + 1 }
-        : p
-    ))
+    setCoursesLoading(false)
+  }
+
+  async function loadLessons(courseId: string) {
+    setLessonsLoading(true)
+    const { data } = await supabase
+      .from('lessons')
+      .select('id, title, content, video_url, lesson_order')
+      .eq('course_id', courseId)
+      .order('lesson_order', { ascending: true })
+    if (data) setLessons(data)
+    setLessonsLoading(false)
+  }
+
+  async function loadMembers() {
+    setMembersLoading(true)
+    const { data } = await supabase
+      .from('community_members')
+      .select('profile_id, role, profiles:profile_id(display_name, avatar_emoji, photo_url)')
+      .eq('community_id', community.id)
+    if (data) {
+      setMembers(data.map((m: any) => ({
+        profile_id: m.profile_id, role: m.role,
+        display_name: m.profiles?.display_name ?? 'Member',
+        avatar_emoji: m.profiles?.avatar_emoji ?? 'ð¤',
+        photo_url: m.profiles?.photo_url ?? null
+      })))
+    }
+    setMembersLoading(false)
+  }
+
+  async function loadLeaderboard() {
+    setLeaderboardLoading(true)
+    const { data } = await supabase
+      .from('community_members')
+      .select('profile_id, role, profiles:profile_id(display_name, avatar_emoji, photo_url)')
+      .eq('community_id', community.id)
+    if (data) {
+      setLeaderboard(data.map((m: any) => ({
+        profile_id: m.profile_id, role: m.role,
+        display_name: m.profiles?.display_name ?? 'Member',
+        avatar_emoji: m.profiles?.avatar_emoji ?? 'ð¤',
+        photo_url: m.profiles?.photo_url ?? null
+      })))
+    }
+    setLeaderboardLoading(false)
+  }
+
+  async function handlePostSubmit() {
+    if (!user || !newPostContent.trim()) return
+    setPostingPost(true)
+    await supabase.from('community_posts').insert({
+      community_id: community.id, author_id: user.id, content: newPostContent.trim()
+    })
+    setNewPostContent('')
+    await loadPosts()
+    setPostingPost(false)
+  }
+
+  async function handleLike(postId: string) {
+    if (!user) { window.location.href = '/login'; return }
+    const post = posts.find(p => p.id === postId)
+    if (!post) return
+    if (post.is_liked) {
+      await supabase.from('post_likes').delete().eq('post_id', postId).eq('profile_id', user.id)
+    } else {
+      await supabase.from('post_likes').insert({ post_id: postId, profile_id: user.id })
+    }
+    setPosts(prev => prev.map(p => p.id === postId ? { ...p, is_liked: !p.is_liked, like_count: p.is_liked ? p.like_count - 1 : p.like_count + 1 } : p))
+  }
+
+  async function loadComments(postId: string) {
+    const { data } = await supabase
+      .from('post_comments')
+      .select('*, profiles:author_id(display_name, avatar_emoji)')
+      .eq('post_id', postId)
+      .order('created_at', { ascending: true })
+    if (data) {
+      setComments(prev => ({
+        ...prev, [postId]: data.map((c: any) => ({
+          id: c.id, content: c.content, created_at: c.created_at,
+          author_id: c.author_id,
+          author_name: c.profiles?.display_name ?? 'Member',
+          author_avatar: c.profiles?.avatar_emoji ?? null,
+          parent_comment_id: c.parent_comment_id ?? null
+        }))
+      }))
+    }
+  }
+
+  async function handleComment(postId: string) {
+    if (!user || !commentInputs[postId]?.trim()) return
+    await supabase.from('post_comments').insert({
+      post_id: postId, author_id: user.id, content: commentInputs[postId].trim()
+    })
+    setCommentInputs(prev => ({ ...prev, [postId]: '' }))
+    await loadComments(postId)
+    setPosts(prev => prev.map(p => p.id === postId ? { ...p, comment_count: p.comment_count + 1 } : p))
   }
 
   function toggleComments(postId: string) {
     setExpandedComments(prev => {
       const next = new Set(prev)
-      if (next.has(postId)) next.delete(postId)
-      else next.add(postId)
+      if (next.has(postId)) { next.delete(postId) }
+      else { next.add(postId); loadComments(postId) }
       return next
     })
   }
 
-  if (loading) return <LoadingSpinner />
+  const tabs: { id: Tab; label: string }[] = [
+    { id: 'feed', label: 'Feed' },
+    { id: 'classroom', label: 'Classroom' },
+    { id: 'members', label: 'Members' },
+    { id: 'leaderboard', label: 'Leaderboard' },
+  ]
 
+  const postCount = posts.length
+
+  // âââ Render âââ
   return (
-    <div className="space-y-4">
-      {/* Post composer */}
-      {user && isJoined && (
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4">
-          <div className="flex gap-3">
-            <Avatar emoji="😊" size={36} />
-            <textarea
-              value={newContent}
-              onChange={e => setNewContent(e.target.value)}
-              placeholder="Was möchtest du teilen?"
-              rows={3}
-              className="flex-1 bg-gray-800 rounded-xl px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-purple-500 resize-none"
-            />
-          </div>
-          {newContent.trim() && (
-            <div className="flex justify-end mt-3">
-              <button
-                onClick={submitPost}
-                disabled={posting}
-                className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-sm font-semibold px-4 py-2 rounded-xl transition-colors"
-              >
-                {posting ? '…' : 'Posten'}
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-      {!user && (
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 text-center text-sm text-gray-500">
-          <Link href="/login" className="text-purple-400 hover:text-purple-300 font-medium">Anmelden</Link>
-          {' '}um zu posten und zu interagieren
-        </div>
-      )}
-      {user && !isJoined && (
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 text-center text-sm text-gray-500">
-          Tritt der Community bei, um zu posten
-        </div>
-      )}
+    <div style={{ backgroundColor: '#F2F2F7', minHeight: '100vh', fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif' }}>
 
-      {posts.length === 0 && (
-        <div className="text-center text-gray-600 py-12">
-          <p className="text-3xl mb-2">📝</p>
-          <p>Noch keine Beiträge</p>
-        </div>
-      )}
-
-      {posts.map(post => (
-        <PostCard
-          key={post.id}
-          post={post}
-          user={user}
-          onLike={() => toggleLike(post)}
-          onComment={() => toggleComments(post.id)}
-          showComments={expandedComments.has(post.id)}
-        />
-      ))}
-    </div>
-  )
-}
-
-function PostCard({
-  post, user, onLike, onComment, showComments
-}: {
-  post: Post; user: User | null; onLike: () => void; onComment: () => void; showComments: boolean
-}) {
-  return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-      <div className="p-4">
-        {/* Author */}
-        <div className="flex items-center gap-3 mb-3">
-          <Avatar emoji={post.author_avatar ?? '😊'} photoUrl={post.author_photo} size={36} />
-          <div>
-            <p className="font-semibold text-sm">{post.author_name}</p>
-            <p className="text-gray-500 text-xs">{formatDate(post.created_at)}</p>
-          </div>
-        </div>
-
-        {/* Content */}
-        <p className="text-sm leading-relaxed whitespace-pre-wrap">{post.content}</p>
-
-        {post.image_url && (
-          <div className="mt-3 rounded-xl overflow-hidden">
-            <img src={post.image_url} alt="" className="w-full object-cover max-h-64" />
-          </div>
+      {/* ââ Cover Image Header ââ */}
+      <div style={{ position: 'relative', height: 230, overflow: 'hidden' }}>
+        {community.cover_image_url ? (
+          <img src={community.cover_image_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        ) : (
+          <div style={{ width: '100%', height: '100%', background: 'linear-gradient(135deg, #6D28D9 0%, #4C1D95 100%)' }} />
         )}
+        {/* M4 6h16M4 12h10M4 18h7" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+            </svg>
+          </div>
+        </div>
 
-        {/* Actions */}
-        <div className="flex gap-4 mt-4 pt-3 border-t border-gray-800">
-          <button
-            onClick={onLike}
-            className={`flex items-center gap-1.5 text-sm transition-colors ${
-              post.is_liked ? 'text-red-400' : 'text-gray-500 hover:text-gray-300'
-            }`}
-          >
-            <span>{post.is_liked ? '❤️' : '🤍'}</span>
-            <span>{post.like_count > 0 ? post.like_count : ''}</span>
-          </button>
-          <button
-            onClick={onComment}
-            className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-300 transition-colors"
-          >
-            <span>💬</span>
-            <span>{post.comment_count > 0 ? post.comment_count : ''}</span>
-          </button>
+        {/* Logo + name at bottom of cover */}
+        <div style={{ position: 'absolute', bottom: 14, left: 16, display: 'flex', alignItems: 'flex-end', gap: 10 }}>
+          <div style={{ width: 52, height: 52, borderRadius: 12, overflow: 'hidden', border: '2.5px solid white', flexShrink: 0, backgroundColor: '#EDE9FE', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26 }}>
+            {community.logo_image_url ? (
+              <img src={community.logo_image_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            ) : (
+              <span>{community.emoji ?? 'ð'}</span>
+            )}
+          </div>
+          <div style={{ paddingBottom: 2 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ color: 'white', fontWeight: 700, fontSize: 20, letterSpacing: -0.3, textShadow: '0 1px 4px rgba(0,0,0,0.4)' }}>{community.name}</span>
+              {isVerified && <VerifiedBadge size={17} />}
+            </div>
+          </div>
         </div>
       </div>
 
-      {showComments && <CommentsSection postId={post.id} user={user} />}
-    </div>
-  )
-}
-
-function CommentsSection({ postId, user }: { postId: string; user: User | null }) {
-  const [comments, setComments] = useState<Comment[]>([])
-  const [newComment, setNewComment] = useState('')
-  const [loading, setLoading] = useState(true)
-  const [sending, setSending] = useState(false)
-
-  useEffect(() => {
-    loadComments()
-  }, [postId])
-
-  async function loadComments() {
-    const { data } = await supabase
-      .from('community_comments')
-      .select(`
-        id, content, created_at, author_id, parent_comment_id,
-        profiles!community_comments_author_id_fkey(display_name, avatar_emoji)
-      `)
-      .eq('post_id', postId)
-      .order('created_at', { ascending: true })
-    if (data) {
-      setComments(data.map(c => {
-        const profile = c.profiles as unknown as { display_name: string; avatar_emoji: string } | null
-        return {
-          id: c.id,
-          content: c.content,
-          created_at: c.created_at,
-          author_id: c.author_id,
-          author_name: profile?.display_name ?? 'Unbekannt',
-          author_avatar: profile?.avatar_emoji ?? '😊',
-          parent_comment_id: c.parent_comment_id,
-        }
-      }))
-    }
-    setLoading(false)
-  }
-
-  async function sendComment() {
-    if (!user || !newComment.trim()) return
-    setSending(true)
-    await supabase.from('community_comments').insert({
-      post_id: postId,
-      author_id: user.id,
-      content: newComment.trim(),
-    })
-    setNewComment('')
-    await loadComments()
-    setSending(false)
-  }
-
-  if (loading) return <div className="px-4 pb-4"><LoadingSpinner /></div>
-
-  return (
-    <div className="border-t border-gray-800 px-4 pb-4">
-      <div className="space-y-3 pt-3">
-        {comments.map(c => (
-          <div key={c.id} className={`flex gap-2.5 ${c.parent_comment_id ? 'ml-8' : ''}`}>
-            <Avatar emoji={c.author_avatar ?? '😊'} size={28} />
-            <div className="flex-1 bg-gray-800 rounded-xl px-3 py-2">
-              <p className="text-xs font-semibold text-gray-300 mb-0.5">{c.author_name}</p>
-              <p className="text-sm text-gray-200 leading-relaxed">{c.content}</p>
+      {/* ââ Community Info Card ââ */}
+      <div style={{ backgroundColor: 'white', marginBottom: 0 }}>
+        {/* Category + Join row */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px 10px' }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, backgroundColor: '#F3F4F6', borderRadius: 20, padding: '5px 12px' }}>
+              <span style={{ fontSize: 14 }}>ð¬</span>
+              <span style={{ fontSize: 13, fontWeight: 500, color: '#374151' }}>{community.category || 'General'}</span>
             </div>
+            {userRole === 'admin' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, backgroundColor: '#FEF3C7', borderRadius: 20, padding: '5px 12px' }}>
+                <span style={{ fontSize: 13 }}>ð</span>
+                <span style={{ fontSize: 13, fontWeight: 500, color: '#92400E' }}>Admin</span>
+              </div>
+            )}
           </div>
+          <button
+            onClick={handleJoin}
+            disabled={joining}
+            style={{
+              padding: '7px 20px',
+              borderRadius: 20,
+              border: isJoined ? '1.5px solid #E5E7EB' : 'none',
+              backgroundColor: isJoined ? 'white' : '#7C3AED',
+              color: isJoined ? '#374151' : 'white',
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: 'pointer',
+              opacity: joining ? 0.7 : 1
+            }}
+          >
+            {joining ? 'â¦' : isJoined ? 'Leave' : 'Join'}
+          </button>
+        </div>
+
+        {/* Description */}
+        {community.description && (
+          <div style={{ padding: '0 16px 14px' }}>
+            <p style={{ fontSize: 14, color: '#4B5563', lineHeight: 1.55, margin: 0 }}>
+              {descExpanded ? community.description : community.description.slice(0, 120) + (community.description.length > 120 ? 'â¦' : '')}
+              {community.description.length > 120 && (
+                <button onClick={() => setDescExpanded(e => !e)} style={{ background: 'none', border: 'none', color: '#7C3AED', fontWeight: 600, fontSize: 13, cursor: 'pointer', padding: 0, marginLeft: 4 }}>
+                  {descExpanded ? 'Less' : 'Show more'}
+                </button>
+              )}
+            </p>
+          </div>
+        )}
+
+        {/* Stats row */}
+        <div style={{ display: 'flex', borderTop: '1px solid #F3F4F6', borderBottom: '1px solid #F3F4F6' }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '12px 0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style={{ color: '#6B7280' }}>
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" stroke="#6B7280" strokeWidth="2" strokeLinecap="round"/>
+                <circle cx="9" cy="7" r="4" stroke="#6B7280" strokeWidth="2"/>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87" stroke="#6B7280" strokeWidth="2" strokeLinecap="round"/>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" stroke="#6B7280" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
+              <span style={{ fontSize: 17, fontWeight: 700, color: '#111' }}>{memberCount}</span>
+            </div>
+            <span style={{ fontSize: 12, color: '#9CA3AF', marginTop: 2 }}>Members</span>
+          </div>
+          <div style={{ width: 1, backgroundColor: '#F3F4F6' }} />
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '12px 0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" stroke="#6B7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              <span style={{ fontSize: 17, fontWeight: 700, color: '#111' }}>{postCount}</span>
+            </div>
+            <span style={{ fontSize: 12, color: '#9CA3AF', marginTop: 2 }}>Posts</span>
+          </div>
+        </div>
+      </div>
+
+      {/* ââ Tab Bar ââ */}
+      <div style={{ backgroundColor: 'white', display: 'flex', borderBottom: '1px solid #E5E7EB', marginBottom: 0, overflowX: 'auto', scrollbarWidth: 'none' }}>
+        {tabs.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            style={{
+              flex: 1,
+              minWidth: 90,
+              padding: '13px 4px',
+              fontSize: 14,
+              fontWeight: tab === t.id ? 600 : 400,
+              color: tab === t.id ? '#111' : '#9CA3AF',
+              background: 'none',
+              border: 'none',
+              borderBottom: tab === t.id ? '2.5px solid #111' : '2.5px solid transparent',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              letterSpacing: -0.1
+            }}
+          >
+            {t.label}
+          </button>
         ))}
       </div>
-      {user && (
-        <div className="flex gap-2 mt-3">
-          <Avatar emoji="😊" size={28} />
-          <input
-            value={newComment}
-            onChange={e => setNewComment(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendComment() } }}
-            placeholder="Kommentar schreiben…"
-            className="flex-1 bg-gray-800 rounded-xl px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-purple-500"
-          />
-          {newComment.trim() && (
-            <button
-              onClick={sendComment}
-              disabled={sending}
-              className="text-purple-400 hover:text-purple-300 text-sm font-medium disabled:opacity-50"
-            >
-              {sending ? '…' : '↑'}
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
 
-// ─── Members Tab ──────────────────────────────────────────────────────────────
+      {/* ââ Tab Content ââ */}
+      <div style={{ padding: '16px', maxWidth: 680, margin: '0 auto' }}>
 
-function MembersTab({ communityId }: { communityId: string }) {
-  const [members, setMembers] = useState<Member[]>([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    supabase
-      .from('community_members')
-      .select(`
-        profile_id, role,
-        profiles!community_members_profile_id_fkey(display_name, avatar_emoji, photo_url)
-      `)
-      .eq('community_id', communityId)
-      .order('created_at', { ascending: false })
-      .limit(100)
-      .then(({ data }) => {
-        if (data) {
-          setMembers(data.map(m => {
-            const p = m.profiles as unknown as { display_name: string; avatar_emoji: string; photo_url: string | null } | null
-            return {
-              profile_id: m.profile_id,
-              role: m.role,
-              display_name: p?.display_name ?? 'Unbekannt',
-              avatar_emoji: p?.avatar_emoji ?? '😊',
-              photo_url: p?.photo_url ?? null,
-            }
-          }))
-        }
-        setLoading(false)
-      })
-  }, [communityId])
-
-  if (loading) return <LoadingSpinner />
-
-  const admins = members.filter(m => m.role === 'admin' || m.role === 'owner')
-  const regular = members.filter(m => m.role !== 'admin' && m.role !== 'owner')
-
-  return (
-    <div className="space-y-6">
-      {admins.length > 0 && (
-        <div>
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Admins</h3>
-          <div className="space-y-2">
-            {admins.map(m => <MemberRow key={m.profile_id} member={m} />)}
-          </div>
-        </div>
-      )}
-      <div>
-        {admins.length > 0 && (
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
-            Mitglieder · {regular.length}
-          </h3>
-        )}
-        <div className="space-y-2">
-          {regular.map(m => <MemberRow key={m.profile_id} member={m} />)}
-        </div>
-      </div>
-      {members.length === 0 && (
-        <div className="text-center text-gray-600 py-12">
-          <p className="text-3xl mb-2">👥</p>
-          <p>Noch keine Mitglieder</p>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function MemberRow({ member }: { member: Member }) {
-  const roleLabel: Record<string, string> = {
-    owner: 'Eigentümer',
-    admin: 'Admin',
-    member: '',
-  }
-  return (
-    <div className="flex items-center gap-3 p-3 bg-gray-900 rounded-xl">
-      <Avatar emoji={member.avatar_emoji} photoUrl={member.photo_url} size={40} />
-      <div className="flex-1 min-w-0">
-        <p className="font-medium text-sm truncate">{member.display_name}</p>
-      </div>
-      {roleLabel[member.role] && (
-        <span className="text-xs text-purple-400 font-medium">{roleLabel[member.role]}</span>
-      )}
-    </div>
-  )
-}
-
-// ─── Classroom Tab ────────────────────────────────────────────────────────────
-
-function ClassroomTab({ communityId }: { communityId: string }) {
-  const [courses, setCourses] = useState<Course[]>([])
-  const [selectedCourse, setSelectedCourse] = useState<Course | null>(null)
-  const [lessons, setLessons] = useState<Lesson[]>([])
-  const [selectedLesson, setSelectedLesson] = useState<Lesson | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [loadingLessons, setLoadingLessons] = useState(false)
-
-  useEffect(() => {
-    supabase
-      .from('community_courses')
-      .select('id, title, description, emoji')
-      .eq('community_id', communityId)
-      .order('created_at', { ascending: true })
-      .then(async ({ data }) => {
-        if (!data) { setLoading(false); return }
-
-        // Get lesson counts
-        const counts: Record<string, number> = {}
-        for (const c of data) {
-          const { count } = await supabase
-            .from('course_lessons')
-            .select('*', { count: 'exact', head: true })
-            .eq('course_id', c.id)
-          counts[c.id] = count ?? 0
-        }
-
-        setCourses(data.map(c => ({ ...c, lesson_count: counts[c.id] ?? 0 })))
-        setLoading(false)
-      })
-  }, [communityId])
-
-  async function openCourse(course: Course) {
-    setSelectedCourse(course)
-    setSelectedLesson(null)
-    setLoadingLessons(true)
-    const { data } = await supabase
-      .from('course_lessons')
-      .select('id, title, content, video_url, lesson_order')
-      .eq('course_id', course.id)
-      .order('lesson_order', { ascending: true })
-    setLessons(data ?? [])
-    setLoadingLessons(false)
-  }
-
-  if (loading) return <LoadingSpinner />
-
-  // Lesson detail view
-  if (selectedLesson) {
-    return (
-      <div>
-        <button
-          onClick={() => setSelectedLesson(null)}
-          className="flex items-center gap-1 text-gray-400 hover:text-white text-sm mb-4 transition-colors"
-        >
-          ← {selectedCourse?.title}
-        </button>
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
-          <h2 className="text-lg font-bold mb-4">{selectedLesson.title}</h2>
-          {selectedLesson.video_url && (
-            <div className="mb-4 rounded-xl overflow-hidden bg-black aspect-video">
-              <video src={selectedLesson.video_url} controls className="w-full h-full" />
-            </div>
-          )}
-          {selectedLesson.content && (
-            <p className="text-gray-300 leading-relaxed whitespace-pre-wrap">{selectedLesson.content}</p>
-          )}
-        </div>
-      </div>
-    )
-  }
-
-  // Lessons list view
-  if (selectedCourse) {
-    return (
-      <div>
-        <button
-          onClick={() => setSelectedCourse(null)}
-          className="flex items-center gap-1 text-gray-400 hover:text-white text-sm mb-4 transition-colors"
-        >
-          ← Alle Kurse
-        </button>
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 mb-4">
-          <div className="flex items-center gap-3 mb-2">
-            <span className="text-3xl">{selectedCourse.emoji ?? '📚'}</span>
-            <div>
-              <h2 className="font-bold">{selectedCourse.title}</h2>
-              {selectedCourse.description && (
-                <p className="text-gray-400 text-sm mt-0.5">{selectedCourse.description}</p>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {loadingLessons ? <LoadingSpinner /> : (
-          <div className="space-y-2">
-            {lessons.length === 0 && (
-              <div className="text-center text-gray-600 py-8">Noch keine Lektionen</div>
-            )}
-            {lessons.map((lesson, idx) => (
-              <button
-                key={lesson.id}
-                onClick={() => setSelectedLesson(lesson)}
-                className="w-full bg-gray-900 hover:bg-gray-800 border border-gray-800 rounded-xl p-4 text-left transition-colors"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-purple-900/50 flex items-center justify-center text-purple-400 font-bold text-sm flex-shrink-0">
-                    {idx + 1}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-sm truncate">{lesson.title}</p>
-                    {lesson.video_url && <p className="text-xs text-gray-500 mt-0.5">▶ Video</p>}
-                  </div>
-                  <span className="text-gray-600 text-sm">›</span>
+        {/* FEED */}
+        {tab === 'feed' && (
+          <div>
+            {/* Post composer */}
+            {user && isJoined && (
+              <div style={{ backgroundColor: 'white', borderRadius: 16, padding: 14, marginBottom: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #F3F4F6' }}>
+                <textarea
+                  value={newPostContent}
+                  onChange={e => setNewPostContent(e.target.value)}
+                  placeholder="Share something with the communityâ¦"
+                  rows={3}
+                  style={{ width: '100%', border: 'none', outline: 'none', fontSize: 14, color: '#111', resize: 'none', backgroundColor: 'transparent', fontFamily: 'inherit', lineHeight: 1.5 }}
+                />
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+                  <button
+                    onClick={handlePostSubmit}
+                    disabled={postingPost || !newPostContent.trim()}
+                    style={{ backgroundColor: '#7C3AED', color: 'white', border: 'none', borderRadius: 20, padding: '7px 18px', fontSize: 14, fontWeight: 600, cursor: 'pointer', opacity: (!newPostContent.trim() || postingPost) ? 0.5 : 1 }}
+                  >
+                    Post
+                  </button>
                 </div>
-              </button>
+              </div>
+            )}
+            {!user && (
+              <div style={{ backgroundColor: 'white', borderRadius: 16, padding: 16, marginBottom: 12, textAlign: 'center', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #F3F4F6' }}>
+                <p style={{ fontSize: 14, color: '#6B7280', margin: '0 0 10px' }}>Sign in to post and interact</p>
+                <Link href="/login" style={{ backgroundColor: '#7C3AED', color: 'white', textDecoration: 'none', borderRadius: 20, padding: '8px 20px', fontSize: 14, fontWeight: 600 }}>Sign In</Link>
+              </div>
+            )}
+            {postsLoading ? (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
+                <div style={{ width: 24, height: 24, border: '2.5px solid #E5E7EB', borderTopColor: '#7C3AED', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+              </div>
+            ) : posts.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '40px 20px', color: '#9CA3AF', fontSize: 14 }}>No posts yet. Be the first! ð</div>
+            ) : posts.map(post => (
+              <div key={post.id} style={{ backgroundColor: 'white', borderRadius: 16, marginBottom: 10, boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #F3F4F6', overflow: 'hidden' }}>
+                <div style={{ padding: 14 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                    <div style={{ width: 36, height: 36, borderRadius: '50%', backgroundColor: '#EDE9FE', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0, overflow: 'hidden' }}>
+                      {post.author_photo ? <img src={post.author_photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : (post.author_avatar ?? 'ð¤')}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: '#111' }}>{post.author_name}</div>
+                      <div style={{ fontSize: 12, color: '#9CA3AF' }}>{timeAgo(post.created_at)}</div>
+                    </div>
+                  </div>
+                  <p style={{ fontSize: 14, color: '#374151', lineHeight: 1.55, margin: 0 }}>{post.content}</p>
+                  {post.image_url && <img src={post.image_url} alt="" style={{ width: '100%', borderRadius: 10, marginTop: 10, objectFit: 'cover' }} />}
+                  <div style={{ display: 'flex', gap: 20, marginTop: 12 }}>
+                    <button onClick={() => handleLike(post.id)} style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: post.is_liked ? '#EF4444' : '#9CA3AF', fontWeight: post.is_liked ? 600 : 400, padding: 0 }}>
+                      <span style={{ fontSize: 16 }}>{post.is_liked ? 'â¤ï¸' : 'ð¤'}</span> {post.like_count}
+                    </button>
+                    <button onClick={() => toggleComments(post.id)} style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: '#9CA3AF', padding: 0 }}>
+                      <span style={{ fontSize: 16 }}>ð¬</span> {post.comment_count}
+                    </button>
+                  </div>
+                </div>
+                {expandedComments.has(post.id) && (
+                  <div style={{ borderTop: '1px solid #F3F4F6', padding: '10px 14px' }}>
+                    {(comments[post.id] ?? []).map(c => (
+                      <div key={c.id} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                        <div style={{ width: 28, height: 28, borderRadius: '50%', backgroundColor: '#EDE9FE', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, flexShrink: 0 }}>
+                          {c.author_avatar ?? 'ð¤'}
+                        </div>
+                        <div style={{ flex: 1, backgroundColor: '#F9FAFB', borderRadius: 10, padding: '8px 10px' }}>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>{c.author_name} </span>
+                          <span style={{ fontSize: 13, color: '#4B5563' }}>{c.content}</span>
+                        </div>
+                      </div>
+                    ))}
+                    {user && (
+                      <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                        <input
+                          value={commentInputs[post.id] ?? ''}
+                          onChange={e => setCommentInputs(prev => ({ ...prev, [post.id]: e.target.value }))}
+                          onKeyDown={e => e.key === 'Enter' && handleComment(post.id)}
+                          placeholder="Write a commentâ¦"
+                          style={{ flex: 1, border: '1px solid #E5E7EB', borderRadius: 20, padding: '7px 14px', fontSize: 13, outline: 'none', backgroundColor: '#F9FAFB' }}
+                        />
+                        <button onClick={() => handleComment(post.id)} style={{ backgroundColor: '#7C3AED', color: 'white', border: 'none', borderRadius: 20, padding: '7px 14px', fontSize: 13, cursor: 'pointer' }}>Send</button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         )}
-      </div>
-    )
-  }
 
-  // Courses list
-  return (
-    <div className="space-y-3">
-      {courses.length === 0 && (
-        <div className="text-center text-gray-600 py-12">
-          <p className="text-3xl mb-2">🎓</p>
-          <p>Noch keine Kurse</p>
-        </div>
-      )}
-      {courses.map(course => (
-        <button
-          key={course.id}
-          onClick={() => openCourse(course)}
-          className="w-full bg-gray-900 hover:bg-gray-800 border border-gray-800 rounded-2xl p-4 text-left transition-colors"
-        >
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-2xl bg-gray-800 flex items-center justify-center text-3xl flex-shrink-0">
-              {course.emoji ?? '📚'}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="font-semibold truncate">{course.title}</p>
-              {course.description && (
-                <p className="text-gray-400 text-sm mt-0.5 line-clamp-2">{course.description}</p>
-              )}
-              <p className="text-xs text-gray-500 mt-1">{course.lesson_count} Lektion{course.lesson_count !== 1 ? 'en' : ''}</p>
-            </div>
-            <span className="text-gray-600">›</span>
-          </div>
-        </button>
-      ))}
-    </div>
-  )
-}
-
-// ─── Info Tab ─────────────────────────────────────────────────────────────────
-
-function InfoTab({ community }: { community: Community }) {
-  return (
-    <div className="space-y-4">
-      {community.description && (
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Über diese Community</h3>
-          <p className="text-gray-300 leading-relaxed">{community.description}</p>
-        </div>
-      )}
-      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 space-y-4">
-        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Details</h3>
-        <div className="grid grid-cols-2 gap-4">
+        {/* CLASSROOM */}
+        {tab === 'classroom' && (
           <div>
-            <p className="text-xs text-gray-500">Kategorie</p>
-            <p className="font-medium mt-0.5">{community.category ?? '–'}</p>
+            {selectedCourse ? (
+              <div>
+                <button onClick={() => { setSelectedCourse(null); setLessons([]) }} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', color: '#7C3AED', fontSize: 14, fontWeight: 600, cursor: 'pointer', padding: '0 0 12px', marginLeft: -4 }}>
+                  â Back to Courses
+                </button>
+                <div style={{ backgroundColor: 'white', borderRadius: 16, overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #F3F4F6', marginBottom: 12 }}>
+                  {selectedCourse.cover_image_url && <img src={selectedCourse.cover_image_url} alt="" style={{ width: '100%', height: 160, objectFit: 'cover' }} />}
+                  <div style={{ padding: 14 }}>
+                    <h2 style={{ margin: '0 0 4px', fontSize: 18, fontWeight: 700 }}>{selectedCourse.title}</h2>
+                    {selectedCourse.description && <p style={{ margin: 0, fontSize: 14, color: '#6B7280' }}>{selectedCourse.description}</p>}
+                  </div>
+                </div>
+                {lessonsLoading ? (
+                  <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
+                    <div style={{ width: 24, height: 24, border: '2.5px solid #E5E7EB', borderTopColor: '#7C3AED', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+                  </div>
+                ) : lessons.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: 30, color: '#9CA3AF', fontSize: 14 }}>No lessons yet</div>
+                ) : lessons.map((lesson, i) => (
+                  <div key={lesson.id} style={{ backgroundColor: 'white', borderRadius: 14, padding: 14, marginBottom: 8, boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #F3F4F6', display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ width: 36, height: 36, borderRadius: '50%', backgroundColor: '#7C3AED', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 15, flexShrink: 0 }}>
+                      {i + 1}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: '#111' }}>{lesson.title}</div>
+                      {lesson.content && <div style={{ fontSize: 12, color: '#9CA3AF', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{lesson.content}</div>}
+                    </div>
+                    {lesson.video_url && <span style={{ fontSize: 12, color: '#7C3AED', backgroundColor: '#EDE9FE', borderRadius: 6, padding: '3px 8px', fontWeight: 600 }}>Video</span>}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div>
+                {coursesLoading ? (
+                  <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
+                    <div style={{ width: 24, height: 24, border: '2.5px solid #E5E7EB', borderTopColor: '#7C3AED', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+                  </div>
+                ) : courses.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '40px 20px', color: '#9CA3AF', fontSize: 14 }}>No courses yet</div>
+                ) : courses.map(course => (
+                  <button key={course.id} onClick={() => { setSelectedCourse(course); loadLessons(course.id) }}
+                    style={{ width: '100%', backgroundColor: 'white', borderRadius: 16, overflow: 'hidden', marginBottom: 10, boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #F3F4F6', cursor: 'pointer', textAlign: 'left', padding: 0 }}>
+                    <div style={{ position: 'relative' }}>
+                      {course.cover_image_url ? (
+                        <img src={course.cover_image_url} alt="" style={{ width: '100%', height: 170, objectFit: 'cover', display: 'block' }} />
+                      ) : (
+                        <div style={{ width: '100%', height: 170, backgroundColor: '#EDE9FE', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 48 }}>
+                          {course.emoji ?? 'ð'}
+                        </div>
+                      )}
+                      <div style={{ position: 'absolute', bottom: 10, right: 10, backgroundColor: 'rgba(0,0,0,0.7)', borderRadius: 8, padding: '4px 10px' }}>
+                        <span style={{ color: 'white', fontSize: 12, fontWeight: 600 }}>{course.lesson_count} Lesson{course.lesson_count !== 1 ? 's' : ''}</span>
+                      </div>
+                    </div>
+                    <div style={{ padding: '12px 14px 14px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#111' }}>{course.title}</h3>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 18l6-6-6-6" stroke="#9CA3AF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      </div>
+                      {course.description && <p style={{ margin: '4px 0 0', fontSize: 13, color: '#6B7280', lineHeight: 1.4 }}>{course.description}</p>}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 8 }}>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><polygon points="5 3 19 12 5 21 5 3" stroke="#9CA3AF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                        <span style={{ fontSize: 13, color: '#9CA3AF' }}>{course.lesson_count} Lesson{course.lesson_count !== 1 ? 's' : ''}</span>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
+        )}
+
+        {/* MEMBERS */}
+        {tab === 'members' && (
           <div>
-            <p className="text-xs text-gray-500">Mitglieder</p>
-            <p className="font-medium mt-0.5">{(community.member_count ?? 0).toLocaleString('de')}</p>
+            {membersLoading ? (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
+                <div style={{ width: 24, height: 24, border: '2.5px solid #E5E7EB', borderTopColor: '#7C3AED', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+              </div>
+            ) : members.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: 40, color: '#9CA3AF', fontSize: 14 }}>No members yet</div>
+            ) : members.map(m => (
+              <div key={m.profile_id} style={{ backgroundColor: 'white', borderRadius: 14, padding: '12px 14px', marginBottom: 8, boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #F3F4F6', display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ width: 42, height: 42, borderRadius: '50%', backgroundColor: '#EDE9FE', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flexShrink: 0, overflow: 'hidden' }}>
+                  {m.photo_url ? <img src={m.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : m.avatar_emoji}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 15, fontWeight: 600, color: '#111' }}>{m.display_name}</div>
+                  <div style={{ fontSize: 12, color: '#9CA3AF', textTransform: 'capitalize' }}>{m.role}</div>
+                </div>
+                {m.role === 'admin' && (
+                  <div style={{ backgroundColor: '#FEF3C7', borderRadius: 20, padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ fontSize: 12 }}>ð</span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: '#92400E' }}>Admin</span>
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
+        )}
+
+        {/* LEADERBOARD */}
+        {tab === 'leaderboard' && (
           <div>
-            <p className="text-xs text-gray-500">Zugang</p>
-            <p className="font-medium mt-0.5 text-green-400">Kostenlos</p>
+            {/* Your rank */}
+            {user && (
+              <div style={{ backgroundColor: 'white', borderRadius: 14, padding: '12px 14px', marginBottom: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #F3F4F6', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: '50%', backgroundColor: '#EDE9FE', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>
+                    {community.logo_image_url ? <img src={community.logo_image_url} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} /> : (community.emoji ?? 'ð')}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12, color: '#9CA3AF' }}>Your rank</div>
+                    <div style={{ fontSize: 16, fontWeight: 700 }}>#1 Â· 0 pts</div>
+                  </div>
+                </div>
+                {userRole === 'admin' && (
+                  <div style={{ backgroundColor: '#FEF3C7', borderRadius: 20, padding: '5px 12px', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span>ð</span>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: '#92400E' }}>Admin</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {leaderboardLoading ? (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
+                <div style={{ width: 24, height: 24, border: '2.5px solid #E5E7EB', borderTopColor: '#7C3AED', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+              </div>
+            ) : leaderboard.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: 40, color: '#9CA3AF', fontSize: 14 }}>No leaderboard data yet</div>
+            ) : (
+              <div>
+                {/* Podium for top 3 */}
+                {leaderboard.length >= 2 && (
+                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-end', gap: 12, marginBottom: 20, paddingTop: 10 }}>
+                    {/* 2nd place */}
+                    {leaderboard[1] && (
+                      <div style={{ flex: 1, textAlign: 'center' }}>
+                        <div style={{ width: 56, height: 56, borderRadius: '50%', backgroundColor: '#EDE9FE', margin: '0 auto 6px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, overflow: 'hidden', border: '2px solid #E5E7EB' }}>
+                          {leaderboard[1].photo_url ? <img src={leaderboard[1].photo_url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : leaderboard[1].avatar_emoji}
+                        </div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>{leaderboard[1].display_name}</div>
+                        <div style={{ fontSize: 12, color: '#9CA3AF' }}>0p</div>
+                        <div style={{ backgroundColor: '#F3F4F6', borderRadius: '8px 8px 0 0', padding: '10px 0', marginTop: 8 }}>
+                          <span style={{ fontSize: 20, fontWeight: 700, color: '#9CA3AF' }}>#3</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {/* Rest of the list */}
+                {leaderboard.slice(3).map((m, i) => (
+                  <div key={m.profile_id} style={{ backgroundColor: 'white', borderRadius: 14, padding: '12px 14px', marginBottom: 8, boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #F3F4F6', display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <span style={{ fontSize: 16, fontWeight: 700, color: '#9CA3AF', width: 28, textAlign: 'center' }}>#{i + 4}</span>
+                    <div style={{ width: 38, height: 38, borderRadius: '50%', backgroundColor: '#EDE9FE', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, overflow: 'hidden' }}>
+                      {m.photo_url ? <img src={m.photo_url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : m.avatar_emoji}
+                    </div>
+                    <span style={{ flex: 1, fontSize: 15, fontWeight: 600, color: '#111' }}>{m.display_name}</span>
+                    <span style={{ fontSize: 13, color: '#9CA3AF' }}>0 pts</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-        </div>
+        )}
       </div>
-      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
-        <p className="text-xs text-gray-500 text-center">
-          Diese Community ist auch in der{' '}
-          <span className="text-purple-400 font-medium">Clarity App</span>{' '}
-          verfügbar
-        </p>
-      </div>
+
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+      `}</style>
     </div>
   )
-}
-
-// ─── Shared components ────────────────────────────────────────────────────────
-
-function Avatar({ emoji, photoUrl, size }: { emoji: string; photoUrl?: string | null; size: number }) {
-  return (
-    <div
-      style={{ width: size, height: size, minWidth: size }}
-      className="rounded-full bg-gray-700 flex items-center justify-center overflow-hidden text-base"
-    >
-      {photoUrl
-        ? <img src={photoUrl} alt="" className="w-full h-full object-cover" />
-        : <span style={{ fontSize: size * 0.55 }}>{emoji}</span>}
-    </div>
-  )
-}
-
-function LoadingSpinner() {
-  return (
-    <div className="flex justify-center py-12">
-      <div className="w-6 h-6 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
-    </div>
-  )
-}
-
-function formatDate(iso: string) {
-  const d = new Date(iso)
-  const now = new Date()
-  const diff = (now.getTime() - d.getTime()) / 1000
-  if (diff < 60) return 'Gerade eben'
-  if (diff < 3600) return `vor ${Math.floor(diff / 60)} Min.`
-  if (diff < 86400) return `vor ${Math.floor(diff / 3600)} Std.`
-  if (diff < 604800) return `vor ${Math.floor(diff / 86400)} Tagen`
-  return d.toLocaleDateString('de-DE', { day: 'numeric', month: 'short' })
 }
