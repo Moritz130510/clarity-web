@@ -8,7 +8,7 @@ export default async function CommunityPage({ params }: { params: Promise<{ id: 
 
   const { data: community, error } = await supabase
     .from('communities')
-    .select('id, name, description, category, emoji, cover_image_url, logo_image_url, member_count, price_type, created_by')
+    .select('id, name, description, category, emoji, cover_image_url, logo_image_url, member_count, price_type, created_by, is_private')
     .eq('id', id)
     .single()
 
