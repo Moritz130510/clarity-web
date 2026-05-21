@@ -22,25 +22,22 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
 
-  /**
-   * Loads community_profiles row for the current auth user.
-   * Uses clarity_id = auth.uid() — NOT id = auth.uid(). This is the central fix
-   * for the "Web App erkennt mich nicht" bug.
-   * If no profile exists, creates one (defensive — DB trigger should do this).
-   */
+  // Schema: community_profiles.id IS auth.uid() (same UUID).
+  // clarity_id is a separate TEXT field — the public-facing ID, not auth.
   const loadProfile = useCallback(async (authUser: User): Promise<Profile | null> => {
     const { data, error } = await supabase
       .from('community_profiles')
       .select('*')
-      .eq('clarity_id', authUser.id)
+      .eq('id', authUser.id)
       .maybeSingle()
 
     if (error) {
       console.warn('[profile-context] loadProfile error:', error)
+      return null
     }
 
     if (data) {
-      // Ensure CEO flag matches email
+      // Ensure CEO flag matches email (iOS app may not set this)
       if (authUser.email === CEO_EMAIL && (!data.is_ceo || !data.is_verified)) {
         const { data: upd } = await supabase
           .from('community_profiles')
@@ -53,12 +50,12 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       return data as Profile
     }
 
-    // No profile row — create one (DB trigger usually handles this; this is a safety net)
+    // No row yet (user signed up via web, no iOS profile) — create one
     const defaultName = authUser.email?.split('@')[0] || 'User'
     const { data: created, error: createErr } = await supabase
       .from('community_profiles')
       .insert({
-        clarity_id: authUser.id,
+        id: authUser.id,
         display_name: defaultName,
         avatar_emoji: '😊',
         total_points: 0,
