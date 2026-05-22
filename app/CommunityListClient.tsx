@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { User } from '@supabase/supabase-js'
+import { useProfile } from '@/lib/profile-context'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 
@@ -34,28 +34,17 @@ function VerifiedBadge({ size = 15 }: { size?: number }) {
 
 export default function CommunityListClient({ communities }: { communities: Community[] }) {
   const router = useRouter()
-  const [user, setUser] = useState<User | null>(null)
+  const { user, profile } = useProfile()
   const [joinedIds, setJoinedIds] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
   const [activeCategory, setActiveCategory] = useState('All')
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      setUser(data.user)
-      if (data.user) loadJoined(data.user.id)
+    if (!profile) { setJoinedIds(new Set()); return }
+    supabase.from('community_members').select('community_id').eq('profile_id', profile.id).then(({ data }) => {
+      if (data) setJoinedIds(new Set(data.map((r: any) => r.community_id)))
     })
-    const { data: sub } = supabase.auth.onAuthStateChange((_, session) => {
-      setUser(session?.user ?? null)
-      if (session?.user) loadJoined(session.user.id)
-      else setJoinedIds(new Set())
-    })
-    return () => sub.subscription.unsubscribe()
-  }, [])
-
-  async function loadJoined(userId: string) {
-    const { data } = await supabase.from('community_members').select('community_id').eq('profile_id', userId)
-    if (data) setJoinedIds(new Set(data.map((r: any) => r.community_id)))
-  }
+  }, [profile?.id])
 
   async function signOut() {
     await supabase.auth.signOut()
